@@ -24,8 +24,7 @@ npm (Node Package Manager)
 Installation
 Clone the repository to your local machine:
 
-bash
-Copy code
+
 git clone https://github.com/your-username/jwt-jwks-server.git
 Navigate to the project directory:
 
