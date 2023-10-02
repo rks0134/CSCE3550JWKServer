@@ -1,73 +1,85 @@
-from flask import Flask, request, jsonify
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
-from cryptography.hazmat.primitives.asymmetric import padding
-import datetime
+from datetime import datetime, timedelta, timezone
+from jwt.utils import base64url_encode, bytes_from_int
+import uuid
+import json
 import jwt
 
-app = Flask(__name__)
+class RequestHandler(BaseHTTPRequestHandler):
+    JWKS = {"keys": []}
 
-# Store RSA keys with kid and expiry timestamp
-keys = []
+    def do_PUT(self):
+        self.send_response(405)
+        self.end_headers()
 
-# Function to generate a new RSA key pair
-def generate_rsa_key():
-    private_key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=2048,
-    )
-    return private_key
+    def do_DELETE(self):
+        self.send_response(405)
+        self.end_headers()
 
-# Function to convert RSA key to JWKS format
-def rsa_key_to_jwks(private_key, kid, expiry):
-    public_key = private_key.public_key()
-    pem = public_key.public_bytes(
-        encoding=Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode('utf-8')
-    jwk = {
-        "kid": kid,
-        "kty": "RSA",
-        "alg": "RS256",
-        "use": "sig",
-        "n": public_key.public_numbers().n,
-        "e": public_key.public_numbers().e,
-        "exp": expiry,
-    }
-    return jwk
+    def do_PATCH(self):
+        self.send_response(405)
+        self.end_headers()
 
-@app.route('/jwks', methods=['GET'])
-def get_jwks():
-    current_time = datetime.datetime.utcnow()
-    active_keys = [key for key in keys if key['exp'] > current_time]
-    jwks = {
-        "keys": active_keys,
-    }
-    return jsonify(jwks)
+    def do_HEAD(self):
+        self.send_response(405)
+        self.end_headers()
 
-@app.route('/auth', methods=['POST'])
-def authenticate():
-    # Mocking authentication (you can replace this with real authentication logic)
-    if request.authorization:
-        username = request.authorization.username
-        password = request.authorization.password
-        if username == "userABC" and password == "password123":
-            # Generate and return a JWT
-            kid = "sample-key"
-            expiry = datetime.datetime.utcnow() + datetime.timedelta(minutes=30)
-            private_key = generate_rsa_key()
-            jwk = rsa_key_to_jwks(private_key, kid, expiry)
-            keys.append(jwk)  # Store the new key temporarily
-            payload = {
-                "sub": username,
-                "iat": datetime.datetime.utcnow(),
-                "exp": expiry,
+    def do_GET(self):
+        if self.path == "/.well-known/jwks.json":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(json.dumps(self.JWKS, indent=1).encode("UTF-8"))
+            return
+        else:
+            self.send_response(405)
+            self.end_headers()
+            return
+
+    def do_POST(self):
+        if self.path == "/auth" or self.path == "/auth?expired=true" or self.path == "/auth?expired=false":
+            expired = False
+            if self.path == "/auth?expired=true":
+                expired = True
+            self.send_response(200)
+            self.end_headers()
+            private_key = self.generate_key_pair()
+            private_key_bytes = private_key.private_bytes(encoding=serialization.Encoding.PEM,
+                                                          format=serialization.PrivateFormat.PKCS8,
+                                                          encryption_algorithm=serialization.NoEncryption())
+            public_key = private_key.public_key()
+            key_id = str(uuid.uuid4())
+            if expired:
+                expiry_time = datetime.now(tz=timezone.utc) + timedelta(0, -3600, 0)
+            else:
+                expiry_time = datetime.now(tz=timezone.utc) + timedelta(0, 3600, 0)
+            jwt_token = jwt.encode({"exp": expiry_time}, private_key_bytes, algorithm="RS256", headers={"kid": key_id})
+            self.wfile.write(bytes(jwt_token, "UTF-8"))
+            jwk = {
+                "kid": key_id,
+                "alg": "RS256",
+                "kty": "RSA",
+                "use": "sig",
+                "n": base64url_encode(bytes_from_int(public_key.public_numbers().n)).decode("UTF-8"),
+                "e": base64url_encode(bytes_from_int(public_key.public_numbers().e)).decode("UTF-8"),
             }
-            token = jwt.encode(payload, private_key, algorithm="RS256")
-            return jsonify({"token": token})
-    
-    return jsonify({"error": "Authentication failed"}), 401
+            if not expiry_time <= datetime.now(tz=timezone.utc):
+                self.JWKS["keys"].append(jwk)
+            return
+        else:
+            self.send_response(405)
+            self.end_headers()
+            return
 
-if __name__ == '__main__':
-    app.run(debug=True, port=8080)
+    def generate_key_pair(self):
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        return private_key
+
+http_server = HTTPServer(("", 8080), RequestHandler)
+print("HTTP Server running on Localhost port 8080...")
+try:
+    http_server.serve_forever()
+except KeyboardInterrupt:
+    pass
+http_server.server_close()
