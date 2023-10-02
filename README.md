@@ -25,7 +25,7 @@ Installation
 Clone the repository to your local machine:
 
 
-git clone https://github.com/your-username/jwt-jwks-server.git
+git clone [https://github.com/your-username/jwt-jwks-server.git](https://github.com/rks0134/CSCE3550JWKServer.git)
 Navigate to the project directory:
 
 
